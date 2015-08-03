@@ -3,19 +3,21 @@
 // Remove duplicates
 // 1% category
 
-
+// import modules
 import std.getopt, std.math, std.stdio, std.regex, std.algorithm, std.range, std.random, std.file, std.string, std.conv;
 import bio.bam.reader, bio.bam.pileup;
 
+
+// initialize global variables
 bool help;
 string patientFolder;
 string fatherFolder;
 string motherFolder;
-int MQ = 29;
-ulong reads_per_bin = 30;
-double distance_factor = 2;
+int MQ = 30;
+ulong reads_per_bin = 15;
+double distance_factor = 3;
 double patient_percentage = 65;
-double patient_count_perc = 25;
+double patient_count_perc = 20;
 
 double patient_count;
 double father_count;
@@ -24,6 +26,7 @@ string patientName;
 string fatherName;
 string motherName;
 
+// function to show usage/help
 void printUsage() {
     stderr.writeln("Usage: switch_point_caller_trio [options] <input.bam> ");
     stderr.writeln();
@@ -36,235 +39,261 @@ void printUsage() {
     stderr.writeln("         -m, --mother (required)");
     stderr.writeln("                    folder with the mother bam files");        
     stderr.writeln("         -r, --reads");
-    stderr.writeln("                    number of reads per bin (DEFAULT: 30)");
+    stderr.writeln("                    number of reads per bin (DEFAULT: 15)");
     stderr.writeln("         -d, --distance");
-    stderr.writeln("                    distance factor (DEFAULT: 2)");
+    stderr.writeln("                    distance factor (DEFAULT: 3)");
     stderr.writeln("         -x, --percentage");
     stderr.writeln("                    minimal percentage of patient cells of all cells supporting the switchpoint(DEFAULT: 65%)");
     stderr.writeln("         -c, --count");
-    stderr.writeln("                    minimal percentage of 'passed' cells in the patient supporting the switchpoint (DEFAULT: 25%)");
+    stderr.writeln("                    minimal percentage of 'passed' cells in the patient supporting the switchpoint (DEFAULT: 20%)");
     stderr.writeln("         -q, --MQ");
-    stderr.writeln("                    skip reads with mapping quality le value (DEFAULT: 10)");
+    stderr.writeln("                    use only reads with high mapping quality (DEFAULT: 30)");
 }
 
 int main(string[] args) {
-    getopt(args, 
-    std.getopt.config.caseSensitive,
-    std.getopt.config.passThrough,
-    "help|h", &help,
-    "reads|r", &reads_per_bin,    
-    "distance|d", &distance_factor,
-    "percentage|x", &patient_percentage,
-    "count|c", &patient_count_perc,
-    "MQ|q", &MQ,
-    "patient|p", &patientFolder,
-    "father|f", &fatherFolder,
-    "mother|m", &motherFolder,    
+    getopt(args, std.getopt.config.caseSensitive, std.getopt.config.passThrough,
+      "help|h", &help,
+      "reads|r", &reads_per_bin,    
+      "distance|d", &distance_factor,
+      "percentage|x", &patient_percentage,
+      "count|c", &patient_count_perc,
+      "MQ|q", &MQ,
+      "patient|p", &patientFolder,
+      "father|f", &fatherFolder,
+      "mother|m", &motherFolder,    
     );
+  
+  // die and show usage if help or patient is empty or father is empty or mother is empty
   if (help || patientFolder == null || fatherFolder == null || motherFolder == null) {
     printUsage();
     return 0;
   }
+  
+  // get name of the sample
   patientName = get_output_name(patientFolder);
   fatherName = get_output_name(fatherFolder);
   motherName = get_output_name(motherFolder);
   
+  // get median distributions
   double[] bin_size_median_distribution_patient = bam_looping(patientFolder);
   double[] bin_size_median_distribution_father = bam_looping(fatherFolder);
   double[] bin_size_median_distribution_mother = bam_looping(motherFolder);
   
-  double[] bin_size_median_distribution_trio = bin_size_median_distribution_patient ~ bin_size_median_distribution_father ~ bin_size_median_distribution_mother;
-  double bin_size_median_trio_mean = mean(bin_size_median_distribution_trio);
-  double merge_distance = bin_size_median_trio_mean/distance_factor;
-  
-  merge_switch_points(patientFolder, fatherFolder, motherFolder, merge_distance);  
+  double[] bin_size_median_distribution_trio = bin_size_median_distribution_patient ~ bin_size_median_distribution_father ~ bin_size_median_distribution_mother; // merge median distributions
+  double bin_size_median_trio_mean = mean(bin_size_median_distribution_trio); // calculate the mean of the median distribution
+  double merge_distance = bin_size_median_trio_mean/distance_factor; // calculate the maximal merge distance between two switchpoints
+  merge_switch_points(patientFolder, fatherFolder, motherFolder, merge_distance); // call denovo switch points clusters
   
   return 1;
 }
 
+// function to loop through the folder and search for *.bam files.
 double[] bam_looping( string folder ) {
-  auto bamFiles = array(filter!`endsWith(a.name,".bam")`(dirEntries(folder,SpanMode.depth)));
+  // initialize variables
   double[] total_reads_distribution;
   double[] FR_bins_ratio_distribution;
   double[] bin_size_median_distribution;
   double[] number_of_bins_distribution;
-  foreach( bamFile ; bamFiles ) {
-    auto output = process_bam(bamFile);
+  
+  auto bamFiles = array(filter!`endsWith(a.name,".bam")`(dirEntries(folder,SpanMode.depth))); // find all *.bam files in the folder
+    
+  foreach( bamFile ; bamFiles ) { // loop through the bam files
+    auto output = process_bam(bamFile); // process a single bam file
+      
+    // store output in different variable
     total_reads_distribution ~= output[0];
     FR_bins_ratio_distribution ~= output[1];
     bin_size_median_distribution ~= output[2];
     number_of_bins_distribution ~= output[3];
   }  
-  bin_size_median_distribution = qc_analysis(bamFiles, total_reads_distribution, FR_bins_ratio_distribution, bin_size_median_distribution, number_of_bins_distribution, folder);  
- 
-  return(bin_size_median_distribution);
+  bin_size_median_distribution = qc_analysis(bamFiles, total_reads_distribution, FR_bins_ratio_distribution, bin_size_median_distribution, number_of_bins_distribution, folder); // preform QC analysis
+  return(bin_size_median_distribution);  // return median distribution
 }
 
+// function to process a single bam file
 Tuple!(double, double, double, double) process_bam(string file) {
-  stdout.writeln("Busy with "~file~"...");
-  BamReader bam = new BamReader(file);
+  // initialize variables
   double total_reads = 0;
   double number_of_bins = 0;
   double[] bin_size_distribution;
   ulong FR_bins;
   ulong total_bins;    
+  
+  stdout.writeln("Busy with "~file~"..."); // show progress  
+  BamReader bam = new BamReader(file); // open bam file with the bamreads module
+    
+  // open output files
   File binsFile = File(file~".bins","w");
   File regionsFile = File(file~".regions","w");
   File pointsFile = File(file~".points","w");
   
+  // write headers to the output files
   binsFile.writeln("#CHR\tSTART\tEND\tSIZE\tF\tR\tCAT");
   regionsFile.writeln("#CHR\tSTART\tEND\tSIZE\tCAT");
   pointsFile.writeln("#CHR\tPOS");
   
-  foreach( chromosome ;  bam.reference_sequences() ) {
-    if (startsWith(chromosome.name, "GL")) {
-      continue;
+  foreach( chromosome ;  bam.reference_sequences() ) { // loop through each chromosome in a single bam file
+    if (startsWith(chromosome.name, "GL")) { continue; } // skip reads on chromosome contigs
+    auto output_determine_bins = determine_bins(bam, chromosome); // determine bins based on reads on a single chromosome
+    total_reads += output_determine_bins[0]; // increase the number of total reads
+    Bin[] bins = output_determine_bins[1]; // store the bins
+    number_of_bins += bins.length; // increase number of bins
+    
+    foreach( bin ; bins ) { // loop through the bins
+      binsFile.writeln(bin.chr,"\t",bin.start,"\t",bin.end,"\t",bin.size,"\t",bin.fwd,"\t",bin.rev,"\t",bin.cat); // report a single bin
+      bin_size_distribution ~= to!double(bin.size); // add the bin size to the bin size distribution
+      if (bin.cat == "FR") { FR_bins++; } // increase the number of FR bins
+      total_bins++; // increase the total number of bins
     }
-    auto output_determine_bins = determine_bins(bam, chromosome);
-    total_reads += output_determine_bins[0];
-    Bin[] bins = output_determine_bins[1];
-    number_of_bins += bins.length;
-    foreach( bin ; bins ) {
-      binsFile.writeln(bin.chr,"\t",bin.start,"\t",bin.end,"\t",bin.size,"\t",bin.fwd,"\t",bin.rev,"\t",bin.cat);
-      bin_size_distribution ~= to!double(bin.size);
-      if (bin.cat == "FR") {
-	FR_bins++;
-      }
-      total_bins++;
-    }
-    Region[] regions = determine_regions(bins);
-    foreach( region ; regions ) {
-      regionsFile.writeln(region.chr,"\t",region.start,"\t",region.end,"\t",region.size,"\t",region.cat);
+    Region[] regions = determine_regions(bins); // determine regions based on bins
+    foreach( region ; regions ) { // loop through the regions
+      regionsFile.writeln(region.chr,"\t",region.start,"\t",region.end,"\t",region.size,"\t",region.cat); // report a single region
     }    
-    Point[] switch_points = determine_switch_points(regions);
-    foreach( point ; switch_points ) {
-      pointsFile.writeln(point.chr,"\t",point.pos);
+    Point[] switch_points = determine_switch_points(regions); // determine switch point based on regions
+    foreach( point ; switch_points ) { // loop through the switchpoints
+      pointsFile.writeln(point.chr,"\t",point.pos); // report a single switch point
     }
   }
-  auto FR_bins_ratio = to!double(FR_bins)/to!double(total_bins);
-  auto bin_size_median = median(bin_size_distribution);
-  auto t = tuple(to!double(total_reads),FR_bins_ratio, bin_size_median,number_of_bins);
-  return(t);
+  auto FR_bins_ratio = to!double(FR_bins)/to!double(total_bins); // calculcate the ratio of FR bins 
+  auto bin_size_median = median(bin_size_distribution); // calucate the median bin size
+  auto t = tuple(to!double(total_reads),FR_bins_ratio, bin_size_median,number_of_bins); // combine variables to a single output variable
+  return(t); // return output variable
 }
 
+// function to determine bins
+// A bin is a region with x number of reads in row
 Tuple!(double, Bin[]) determine_bins(BamReader bam, ReferenceSequenceInfo chromosome ) {
-  auto reads = bam[chromosome.name];
+  // initialize variables
   BamReadBlock[] binreads;
   ulong forward_reads = 0;
   ulong reverse_reads = 0;
   double total_reads = 0;
   Bin[] bins;
 
-  foreach( read ; reads ) {
-    if (read.mapping_quality > MQ && !read.is_duplicate) {
-      if (binreads.length < reads_per_bin) {
-	if (read.strand == '+') {
-	  forward_reads++;
-	} else if (read.strand == '-') {
-	  reverse_reads++;
-	}
-	binreads ~= read;
-      } else {
-	string cat = get_bin_category(binreads, forward_reads, reverse_reads);
-	Bin bin = new Bin(chromosome.name, binreads[0].position, binreads[$-1].position, forward_reads, reverse_reads, cat);
-	bins ~= bin;	  
+  auto reads = bam[chromosome.name]; // get all reads on the single chromsome 
+  foreach( read ; reads ) { // loop through the reads
+    if (read.mapping_quality >= MQ && !read.is_duplicate) { // skip reads with low mapping_quality and duplicate reads
+      if (binreads.length < reads_per_bin) { // if the number of reads in a single bin is smaller then the minimal number of reads in a single bin
+	if (read.strand == '+') { forward_reads++; } // increase the number of reads on the forward strand inthe bin
+	else if (read.strand == '-') { reverse_reads++; } // increase the number of reads on the reverse strand in the bin
+	binreads ~= read; // add a single read to the bin
+      } else { // if the number of reads in the bin is equal to the minimal number of reads in a single bin
+	string cat = get_bin_category(binreads, forward_reads, reverse_reads); // determine category of the bin (F, R or FR)
+	Bin bin = new Bin(chromosome.name, binreads[0].position, binreads[$-1].position, forward_reads, reverse_reads, cat); // create a new bin object
+	bins ~= bin; // add the bin to the list of bins
+	// if the first read in the bin is on the forward strand and the new read in on the reverse strand
+	// decrease the number reads on the forward strand and increase the number of reads on the reverse strand
 	if (binreads[0].strand == '+' && read.strand == '-') {
 	  forward_reads--;
 	  reverse_reads++;
+	// if the first read in the bin is on the reverse strand and the new read in on the forward strand
+	// decrease the number reads on the reverse strand and increase the number of reads on the forward strand	
 	} else if (binreads[0].strand == '-' && read.strand == '+') {
 	  reverse_reads--;
 	  forward_reads++;
 	}
-	binreads = binreads[1..$];
-	binreads ~= read;
+	binreads = binreads[1..$]; // remove first read in the bin from the bin	
+	binreads ~= read; // add the new read to the bin	
       }
-      total_reads++;	
+      total_reads++; // increase the total number of reads
     }
   }
+  // process the last bin of the chromsome
   if (binreads.length > 0) {
-    string cat = get_bin_category(binreads, forward_reads, reverse_reads);
-    Bin bin = new Bin(chromosome.name, binreads[0].position, binreads[$-1].position, forward_reads, reverse_reads, cat);
-    bins ~= bin;
+    string cat = get_bin_category(binreads, forward_reads, reverse_reads); // determine category of the bin (F, R or FR)
+    Bin bin = new Bin(chromosome.name, binreads[0].position, binreads[$-1].position, forward_reads, reverse_reads, cat); // create a new bin object
+    bins ~= bin; // add the bin to the list of bins
   }
-  auto t = tuple(total_reads,bins);
-  return(t);
+  auto t = tuple(total_reads,bins); // combine variables to a single output variable
+  return(t); // return output variable
 }
 
+// function to determine category
+// A category is based on the number of reads on the forward strand
 string get_bin_category(BamReadBlock[] reads, ulong fwd_reads, ulong rev_reads) {
-  int start = reads[0].position;
-  int end = reads[$-1].position;
-  double fwd_ratio = to!double(fwd_reads)/(to!double(rev_reads)+to!double(fwd_reads));
-  string category = "FR";
-  if (fwd_ratio >= 0.9) {
-    category = "F";
-  } else if (fwd_ratio <= 0.1) {
-    category = "R";
-  }
-  return(category);
+  string category = "FR"; // initialize category variable  
+  double fwd_ratio = to!double(fwd_reads)/(to!double(rev_reads)+to!double(fwd_reads)); // calculate 'forward' reads ratio
+  if (fwd_ratio >= 0.99) { category = "F"; } // category = F(orward) if 99% of the reads is on the forward strand
+  else if (fwd_ratio <= 0.01) { category = "R"; } // category = R(everse) if 1% of the reads in on the forward strand
+  return(category); // return category variable
 }
 
+// function to determing regions
+// A region is an x number of bins in a row with the same category
 Region[] determine_regions(Bin[] bins) {
+  // initialize variables
   string prev_cat = "X";
   Region[] regions_out;
   Bin[][string] regions;
-  foreach( bin ; bins ) {
-    if (prev_cat != "X") {
-      if (bin.cat == prev_cat) {
-	foreach( region_cat ; regions.keys ) {
+  
+  foreach( bin ; bins ) { // loop through each bin
+    if (prev_cat != "X") { // if it's not the first  bin
+      if (bin.cat == prev_cat) { // if category is equal to the category of the previous bin
+	foreach( region_cat ; regions.keys ) { // loop through the different categories in the region
+	  // if the number of bins with the same category is bigger or equal to the minimal number of reads in a bin
+	  // and the category is different then the current category
+	  // and the number of bins with the current category in the region is bigger or equal to the minimal number of reads in a bin
 	  if (regions[region_cat].length >= reads_per_bin && region_cat != bin.cat && regions[bin.cat].length >= reads_per_bin) {
-	    Region region = new Region(regions[region_cat][0].chr, regions[region_cat][0].start, regions[region_cat][$-1].end, region_cat);
-	    regions_out ~= region;
-	    regions[region_cat] = null;
-	  } else if (regions[region_cat].length < reads_per_bin && region_cat != bin.cat) {
-	    regions[region_cat] = null;
+	    Region region = new Region(regions[region_cat][0].chr, regions[region_cat][0].start, regions[region_cat][$-1].end, region_cat); // create a new region object
+	    regions_out ~= region; // add region to a list of regions
+	    regions[region_cat] = null; // empty the region with the specific category
+	    // if number of bins in region is lower then the minimal number of reads in a bin and the category is different then the current category
+	  } else if (regions[region_cat].length < reads_per_bin && region_cat != bin.cat) { 
+	    regions[region_cat] = null; // empty the region with the specific category
 	  }
 	}
-	regions[bin.cat] ~= bin;
-      } else {
-	if (bin.cat in regions && regions[bin.cat].length >= reads_per_bin) {
-	  foreach( region_cat ; regions.keys ) {
-	    if (region_cat != bin.cat) {
-	      regions[region_cat] = null;
-	    }
+	regions[bin.cat] ~= bin; // add bin to the region with the specific category
+      } else { // if category is different then the previous category
+	// if current category exists in the region and the number of bins is bigger or equal to the minimal number of reads in a bin
+	if (bin.cat in regions && regions[bin.cat].length >= reads_per_bin) { 
+	  foreach( region_cat ; regions.keys ) { // loop through all categories in the region
+	    if (region_cat != bin.cat) {  regions[region_cat] = null; } // if category is different then the current category, discard category from region
 	  }
 	}
-	regions[bin.cat] ~= bin;
+	regions[bin.cat] ~= bin; // add bin to the region with the current category
       }
-    } else {
-      regions[bin.cat] ~= bin;
-    }	  
-    prev_cat = bin.cat.dup;
+    } else { regions[bin.cat] ~= bin; } // add the first bin to the region with the current category
+    prev_cat = bin.cat.dup; // store current category to the previous category
   }
-  foreach( region_cat ; regions.keys ) {
-    if (regions[region_cat].length > 1) {
-      Region region = new Region(regions[region_cat][0].chr, regions[region_cat][0].start, regions[region_cat][$-1].end, region_cat);
-      regions_out ~= region;
+  foreach( region_cat ; regions.keys ) { // loop trough the categories in the last region
+    if (regions[region_cat].length > 1) { // if the number of bins is bigger the 1
+      Region region = new Region(regions[region_cat][0].chr, regions[region_cat][0].start, regions[region_cat][$-1].end, region_cat); // create new region object
+      regions_out ~= region; // add region to a list of region
     }
   }
-  return(regions_out);
+  return(regions_out); // return the list of regions
 }
 
+// function to determine switch points
+// A switch point is the start position of a region
 Point[] determine_switch_points(Region[] regions) {
-  Point[] switch_points;
-  for( int i = 1; i < regions.length; i++ ) {
-    Point point = new Point(regions[i].chr, regions[i].start);
-    switch_points ~= point;
+  Point[] switch_points; // initialize list of switch points
+  foreach( region ; regions ) { // loop through the regions
+    Point point = new Point(region.chr, region.start); // create a switch point object
+    switch_points ~= point; // add the switch point to the list of switch points
   }
-  return(switch_points);
+  return(switch_points); // return the list of switch point
 }
 
+// function for the QC analysis
 double[] qc_analysis(DirEntry[] bamFiles, double[] total_reads_distribution, double[] FR_bins_ratio_distribution, double[] bin_size_median_distribution, double[] number_of_bins_distribution, string folder) {
+  // initialize variables
   string[] failed;  
+  double[] bin_size_median_distribution2;
+  ulong passed_cells = 0;
+    
+  // calculate means and standard deviations
   double total_reads_mean = mean(total_reads_distribution);
   double total_reads_sd = stdev(total_reads_distribution);
   double FR_bins_ratio_mean = mean(FR_bins_ratio_distribution);
   double FR_bins_ratio_sd = stdev(FR_bins_ratio_distribution);    
   double number_of_bins_mean = mean(number_of_bins_distribution);
   double number_of_bins_sd = stdev(number_of_bins_distribution);
-  double[] bin_size_median_distribution2;
-  string outName = get_output_name(folder);  
-  ulong passed_cells = 0;
-  File statsFile = File(outName~"_stats.txt", "w");
+  
+  string outName = get_output_name(folder); // get the output name
+  File statsFile = File(outName~"_stats.txt", "w"); // open the output file for the statistics
+  
+  // write the header to the statistics output file
   statsFile.writeln("##TOTAL READS MEAN: ",total_reads_mean);
   statsFile.writeln("##TOTAL READS SD: ",total_reads_sd);
   statsFile.writeln("##FR BIN RATIO MEAN: ",FR_bins_ratio_mean);
@@ -272,41 +301,40 @@ double[] qc_analysis(DirEntry[] bamFiles, double[] total_reads_distribution, dou
   statsFile.writeln("##NUMBER OF BINS MEAN: ", number_of_bins_mean);
   statsFile.writeln("##NUMBER OF BINS SD: ",number_of_bins_sd);
   statsFile.writeln("#FILE\tTOTAL_READS\tFR_BIN_RATIO\tMEDIAN_BIN_SIZE\tREADS_PER_BINS\tNUMBER_OF_BINS\tFILTER\tREASON");
-  for( int i; i < bamFiles.length; i++ ) {
-//     auto reads_per_bin = total_reads_distribution[i]/100*reads_percentage;
+  
+  for( int i; i < bamFiles.length; i++ ) { // loop through all the *.bam files
+    // if the total number of reads is less then the mean-sd, this bam file failed the QC
     if (total_reads_distribution[i] < (total_reads_mean-total_reads_sd)) {
       statsFile.writeln(bamFiles[i],"\t",total_reads_distribution[i],"\t",FR_bins_ratio_distribution[i],"\t",bin_size_median_distribution[i],"\t",to!int(reads_per_bin),"\t",number_of_bins_distribution[i],"\t","FAILED","\t","TOTAL READS");
+    // if the ratio of FR bins is bigger then the mean+sd, this bam file failed the QC
     } else if (FR_bins_ratio_distribution[i] > (FR_bins_ratio_mean+FR_bins_ratio_sd)) {
       statsFile.writeln(bamFiles[i],"\t",total_reads_distribution[i],"\t",FR_bins_ratio_distribution[i],"\t",bin_size_median_distribution[i],"\t",to!int(reads_per_bin),"\t",number_of_bins_distribution[i],"\t","FAILED","\t","FR BIN RATIO");
-    } else if (reads_per_bin < 2) {
-      statsFile.writeln(bamFiles[i],"\t",total_reads_distribution[i],"\t",FR_bins_ratio_distribution[i],"\t",bin_size_median_distribution[i],"\t",to!int(reads_per_bin),"\t",number_of_bins_distribution[i],"\t","FAILED","\t","READS PER BIN");
+    // if the total number of bins is less then the mean+sd, this bam file failed the QC    
     } else if (number_of_bins_distribution[i] < (number_of_bins_mean-number_of_bins_sd)) {
       statsFile.writeln(bamFiles[i],"\t",total_reads_distribution[i],"\t",FR_bins_ratio_distribution[i],"\t",bin_size_median_distribution[i],"\t",to!int(reads_per_bin),"\t",number_of_bins_distribution[i],"\t","FAILED","\t","NUMBER OF BINS");
+    // report the passed QC bam files
     } else {
       statsFile.writeln(bamFiles[i],"\t",total_reads_distribution[i],"\t",FR_bins_ratio_distribution[i],"\t",bin_size_median_distribution[i],"\t",to!int(reads_per_bin),"\t",number_of_bins_distribution[i],"\t","PASS","\t","");
-      bin_size_median_distribution2 ~= bin_size_median_distribution[i];
-      passed_cells++;
+      bin_size_median_distribution2 ~= bin_size_median_distribution[i]; // add median distribution of a passed QC bam file
+      passed_cells++; // increase the number of passed QC files
     }
   }
-  if (outName == patientName) {
-    patient_count = to!double(passed_cells)/100*to!double(patient_count_perc);
-  } else if (outName == fatherName) {
-    father_count = to!double(passed_cells)/100*to!double(patient_count_perc);
-  } else if (outName == motherName) {
-    mother_count = to!double(passed_cells)/100*to!double(patient_count_perc);
-  }
-  return(bin_size_median_distribution2);
+  // calculate the minimal number of cells, based on only passed QC files
+  if (outName == patientName) { patient_count = to!double(passed_cells)/100*to!double(patient_count_perc); } 
+  else if (outName == fatherName) { father_count = to!double(passed_cells)/100*to!double(patient_count_perc); } 
+  else if (outName == motherName) { mother_count = to!double(passed_cells)/100*to!double(patient_count_perc); }
+  return(bin_size_median_distribution2); // return meadian distribution of only passed QC files
 }
 
-
-
-
+// function to merge switch points
 void merge_switch_points(string patientFolder, string fatherFolder, string motherFolder, double merge_distance) {
+  ulong[DirEntry][string][ulong][string] switch_points; // initialize switch points variable  
   
+  // initialize output file name
   string outputName = "switch_points_p"~patientName~"_f"~fatherName~"_m"~motherName~"_r"~to!string(reads_per_bin)~"_d"~to!string(distance_factor)~"_x"~to!string(patient_percentage)~"_c"~to!string(patient_count_perc)~"_q"~to!string(MQ)~".txt";
-    
-  File output = File(outputName,"w");
+  File output = File(outputName,"w"); // open output file
   
+  // write header to the output file
   output.writeln("##PATIENT: ",patientName);
   output.writeln("##FATHER: ",fatherName);
   output.writeln("##MOTHER: ",motherName);
@@ -315,286 +343,152 @@ void merge_switch_points(string patientFolder, string fatherFolder, string mothe
   output.writeln("##PERCENTAGE PATIENT CELLS: ", patient_percentage);
   output.writeln("##PATIENT COUNT PERCENTAGE: ",patient_count_perc);
   output.writeln("##MERGE_DISTANCE: ",merge_distance);  
-  output.writeln("##PATIENT COUNT: ",to!ulong(patient_count));
-  
-  output.writeln("#CHR\tSTART\tEND\t","TUNED","\t",patientName,"\t",fatherName,"\t",motherName,"\tPATIENT_PERC\tFATHER_PERC\tMOTHER_PERC\tFILTER\tREASON\tPATIENT_UNIQ\tFATHER_UNIQ\tMOTHER_UNIQ");
-  
-  ulong[DirEntry][string][ulong][string] switch_points;
-  
-  foreach( folder ; [patientFolder, fatherFolder, motherFolder] ) {
-    string name = get_output_name(folder);
-    auto pointsFiles = array(filter!`endsWith(a.name,".points")`(dirEntries(folder,SpanMode.depth)));
-    foreach( pointsFile ; pointsFiles ) {
-      File file = File(pointsFile,"r");
-      while(!file.eof()) {
-	string[] line = chomp(file.readln()).split("\t");
-	if (line.length > 1 && line[0] != "#CHR") {
-	  switch_points[line[0]][to!ulong(line[1])][name][pointsFile]++;
-	}
+  output.writeln("##PATIENT COUNT: ",to!ulong(patient_count));  
+  output.writeln("#CHR\tSTART\tEND\t","\t",patientName,"\t",fatherName,"\t",motherName,"\tPATIENT_PERC\tFATHER_PERC\tMOTHER_PERC\tFILTER\tREASON\tPATIENT_UNIQ\tFATHER_UNIQ\tMOTHER_UNIQ");
+    
+  foreach( folder ; [patientFolder, fatherFolder, motherFolder] ) { // loop trough each folder of all samples
+    string name = get_output_name(folder); // get output name of the sample
+    auto pointsFiles = array(filter!`endsWith(a.name,".points")`(dirEntries(folder,SpanMode.depth))); // get all *.points files
+    foreach( pointsFile ; pointsFiles ) { // loop through all switch points files
+      File file = File(pointsFile,"r"); // open switch point file
+      while(!file.eof()) { // loop through the switch point file
+	string[] line = chomp(file.readln()).split("\t"); // split each line on tabs
+	if (line.length > 1 && line[0] != "#CHR") { switch_points[line[0]][to!ulong(line[1])][name][pointsFile]++; } // store the switch point in a hash of switch points
       }
     }
   }
   
-  foreach( chr ; switch_points.keys.sort ) {
+  foreach( chr ; switch_points.keys.sort ) { // loop through all switch points in all files of all samples
+    // initialize variables
     ulong prev_pos = -1;
     ulong[] switch_point_region;
     ulong[string][string] samples;
-    foreach( pos ; switch_points[chr].keys.sort ) {
-      foreach( sample ; switch_points[chr][pos].keys ) {
-	foreach( file ; switch_points[chr][pos][sample].keys ) {
-	  if ((pos-prev_pos) < merge_distance || prev_pos == -1) {
-	    switch_point_region ~= pos;
-	    samples[sample][file]++;
-	  } else if (prev_pos != -1) {
+    
+    foreach( pos ; switch_points[chr].keys.sort ) { // loop through each switch point position on a specific chromosome
+      foreach( sample ; switch_points[chr][pos].keys ) { // loop through each sample containing the switch point position
+	foreach( file ; switch_points[chr][pos][sample].keys ) { // loop through each file of the sample containing the switch point position
+	  if ((pos-prev_pos) < merge_distance || prev_pos == -1) { // if the distance between two switch points is less then 'variable', except the first switch point position
+	    switch_point_region ~= pos; // store position in a switch point region
+	    samples[sample][file]++; // store the sample and file in a switch point region
+	  } else if (prev_pos != -1) { // if the distance bewtween two switch_points is bigger or equal to 'variable', except the first switch point position
+	    // initialize sample specific variables
 	    ulong patient_switch_points = 0;
 	    ulong father_switch_points = 0;
 	    ulong mother_switch_points = 0;
-	    if (patientName in samples) {
-	      patient_switch_points = samples[patientName].keys.length;
-	    }
-	    if (fatherName in samples) {
-	      father_switch_points = samples[fatherName].keys.length;
-	    }
-	    if (motherName in samples) {
-	      mother_switch_points = samples[motherName].keys.length;
-	    }
+	    int patient_uniq = 0;
+	    int father_uniq = 0;
+	    int mother_uniq = 0;	    
+	    
+	    // increase the number of switch point in the switch point region found in each sample
+	    if (patientName in samples) { patient_switch_points = samples[patientName].keys.length; }
+	    if (fatherName in samples) { father_switch_points = samples[fatherName].keys.length; }
+	    if (motherName in samples) { mother_switch_points = samples[motherName].keys.length; }
+	    
+	    // calculate the percentage of switch points in the switch point region found in each sample
 	    double perc_patient = patient_switch_points/to!double(patient_switch_points+father_switch_points+mother_switch_points)*100;
 	    double perc_father = father_switch_points/to!double(patient_switch_points+father_switch_points+mother_switch_points)*100;
 	    double perc_mother = mother_switch_points/to!double(patient_switch_points+father_switch_points+mother_switch_points)*100;
-	    int patient_uniq = 0;
-	    int father_uniq = 0;
-	    int mother_uniq = 0;
-	    if (perc_patient >= patient_percentage && patient_switch_points >= patient_count) {
-	      patient_uniq = 1;
-	    } else if (perc_father >= patient_percentage && father_switch_points >= father_count) {
-	      father_uniq = 1;
-	    } else if (perc_mother >= patient_percentage && mother_switch_points >= mother_count) {
-	      mother_uniq = 1;
-	    }
+	    
+	    // determine sample specific switch point regions
+	    if (perc_patient >= patient_percentage && patient_switch_points >= patient_count) { patient_uniq = 1; }
+	    else if (perc_father >= patient_percentage && father_switch_points >= father_count) { father_uniq = 1; }
+	    else if (perc_mother >= patient_percentage && mother_switch_points >= mother_count) { mother_uniq = 1; }
+	    
+	    // if the percentage of switch points in the switch point region found in the patient is less then 'variable', report as failed
 	    if (perc_patient < patient_percentage) {
 	      output.writeln(chr,"\t",switch_point_region[0],"\t",switch_point_region[$-1],"\t","-","\t",patient_switch_points,"\t",father_switch_points,"\t",mother_switch_points,"\t",perc_patient,"\t",perc_father,"\t",perc_mother,"\t","FAILED","\t","PATIENT PERCENTAGE","\t",patient_uniq,"\t",father_uniq,"\t",mother_uniq);
+	    // if the number of switch points in the switch point region found in the patient is less then 'variable', report as failed	      
 	    } else if (patient_switch_points < patient_count) {
 	      output.writeln(chr,"\t",switch_point_region[0],"\t",switch_point_region[$-1],"\t","-","\t",patient_switch_points,"\t",father_switch_points,"\t",mother_switch_points,"\t",perc_patient,"\t",perc_father,"\t",perc_mother,"\t","FAILED","\t","PATIENT COUNT","\t",patient_uniq,"\t",father_uniq,"\t",mother_uniq);
+	    // report patient denovo switch points
 	    } else {
-// 	      double tuned = fine_tuning(chr,switch_point_region[0], switch_point_region[$-1], samples[patientName].keys);
-	      double tuned = 0.0;
-	      output.writeln(chr,"\t",switch_point_region[0],"\t",switch_point_region[$-1],"\t",to!ulong(tuned),"\t",patient_switch_points,"\t",father_switch_points,"\t",mother_switch_points, "\t",perc_patient,"\t",perc_father,"\t",perc_mother,"\t","PASS","\t","-","\t",patient_uniq,"\t",father_uniq,"\t",mother_uniq);
+	      output.writeln(chr,"\t",switch_point_region[0],"\t",switch_point_region[$-1],"\t",patient_switch_points,"\t",father_switch_points,"\t",mother_switch_points, "\t",perc_patient,"\t",perc_father,"\t",perc_mother,"\t","PASS","\t","-","\t",patient_uniq,"\t",father_uniq,"\t",mother_uniq);
 	    }
-	    switch_point_region = [pos];
-	    samples = null;
-	    samples[sample][file]++;
+	    switch_point_region = [pos]; // empty switch point region and store first new switch point position
+	    samples = null; // empty samples list
+	    samples[sample][file]++; // add sample and file to the list
 	  }
 	}
       }
-      prev_pos = pos;
+      prev_pos = pos; // store switch point position to the previous switch point position
     }
+    // last switch point region
+    // initialize sample specific variables
     ulong patient_switch_points = 0;
     ulong father_switch_points = 0;
     ulong mother_switch_points = 0;
-    if (patientName in samples) {
-      patient_switch_points = samples[patientName].keys.length;
-    }
-    if (fatherName in samples) {
-      father_switch_points = samples[fatherName].keys.length;
-    }
-    if (motherName in samples) {
-      mother_switch_points = samples[motherName].keys.length;
-    }
+    int patient_uniq = 0;
+    int father_uniq = 0;
+    int mother_uniq = 0;	    
+    
+    // increase the number of switch point in the switch point region found in each sample
+    if (patientName in samples) { patient_switch_points = samples[patientName].keys.length; }
+    if (fatherName in samples) { father_switch_points = samples[fatherName].keys.length; }
+    if (motherName in samples) { mother_switch_points = samples[motherName].keys.length; }
+    
+    // calculate the percentage of switch points in the switch point region found in each sample
     double perc_patient = patient_switch_points/to!double(patient_switch_points+father_switch_points+mother_switch_points)*100;
     double perc_father = father_switch_points/to!double(patient_switch_points+father_switch_points+mother_switch_points)*100;
     double perc_mother = mother_switch_points/to!double(patient_switch_points+father_switch_points+mother_switch_points)*100;
-    int patient_uniq = 0;
-    int father_uniq = 0;
-    int mother_uniq = 0;
-    if (perc_patient >= patient_percentage && patient_switch_points >= patient_count) {
-      patient_uniq = 1;
-    } else if (perc_father >= patient_percentage && father_switch_points >= father_count) {
-      father_uniq = 1;
-    } else if (perc_mother >= patient_percentage && mother_switch_points >= mother_count) {
-      mother_uniq = 1;
-    }
+    
+    // determine sample specific switch point regions
+    if (perc_patient >= patient_percentage && patient_switch_points >= patient_count) { patient_uniq = 1; }
+    else if (perc_father >= patient_percentage && father_switch_points >= father_count) { father_uniq = 1; }
+    else if (perc_mother >= patient_percentage && mother_switch_points >= mother_count) { mother_uniq = 1; }
+    
+    // if the percentage of switch points in the switch point region found in the patient is less then 'variable', report as failed
     if (perc_patient < patient_percentage) {
       output.writeln(chr,"\t",switch_point_region[0],"\t",switch_point_region[$-1],"\t","-","\t",patient_switch_points,"\t",father_switch_points,"\t",mother_switch_points,"\t",perc_patient,"\t",perc_father,"\t",perc_mother,"\t","FAILED","\t","PATIENT PERCENTAGE","\t",patient_uniq,"\t",father_uniq,"\t",mother_uniq);
+    // if the number of switch points in the switch point region found in the patient is less then 'variable', report as failed	      
     } else if (patient_switch_points < patient_count) {
       output.writeln(chr,"\t",switch_point_region[0],"\t",switch_point_region[$-1],"\t","-","\t",patient_switch_points,"\t",father_switch_points,"\t",mother_switch_points,"\t",perc_patient,"\t",perc_father,"\t",perc_mother,"\t","FAILED","\t","PATIENT COUNT","\t",patient_uniq,"\t",father_uniq,"\t",mother_uniq);
+    // report patient denovo switch points
     } else {
-      double tuned = 0.0;
-//       double tuned = fine_tuning(chr,switch_point_region[0], switch_point_region[$-1], samples[patientName].keys);
-      output.writeln(chr,"\t",switch_point_region[0],"\t",switch_point_region[$-1],"\t",to!ulong(tuned),"\t",patient_switch_points,"\t",father_switch_points,"\t",mother_switch_points, "\t",perc_patient,"\t",perc_father,"\t",perc_mother,"\t","PASS","\t","-","\t",patient_uniq,"\t",father_uniq,"\t",mother_uniq);
+      output.writeln(chr,"\t",switch_point_region[0],"\t",switch_point_region[$-1],"\t",patient_switch_points,"\t",father_switch_points,"\t",mother_switch_points, "\t",perc_patient,"\t",perc_father,"\t",perc_mother,"\t","PASS","\t","-","\t",patient_uniq,"\t",father_uniq,"\t",mother_uniq);
     }
   }  
 }
 
-double fine_tuning( string chr, ulong start, ulong end, string[] files) {
-//   writeln(chr,"\t",start,"\t",end);
-  double[] tuned_start;
-  double[] tuned_end;
-  foreach( file ; files ) {
-    File inFile = File(file,"r");
-    while(!inFile.eof()) {
-      string[] line = chomp(inFile.readln()).split("\t");
-      if (line.length > 1 && line[0] != "#CHR") {
-	if (line[0] == chr && to!ulong(line[1]) >= start && to!ulong(line[1]) <= end) {
-	  ulong[2] tuned_positions = get_regions(file, chr, to!ulong(line[1]));
-	  if (tuned_positions[0] != 0) {
-	    tuned_start ~= to!double(tuned_positions[0]);
-	  }
-	  if (tuned_positions[1] != 0) {
-	    tuned_end ~= to!double(tuned_positions[1]);
-	  }
-	}
-      }
-    }
-  }
-  double[] tuned = tuned_start ~ tuned_end;
-  double tuned_mean = mean(tuned);
-  return(tuned_mean);
-//   writeln(chr,"\t",start,"\t",end,"\t",tuned_positions.keys.sort[0],"\t",tuned_positions.keys.sort[$-1]);
-//   writeln(tuned_positions);
-//   writeln();
-}
-
-ulong[2] get_regions( string file, string chr, ulong pos ) {
-  file = file.replace("points","bins");
-  File inFile = File(file,"r");
-  string[] before_bin2;  
-  string[] before_bin;
-  string[] after_bin;
-  string[] after_bin2;  
-  while(!inFile.eof()) {
-    string[] line = chomp(inFile.readln()).split("\t");
-    if (line.length > 0 && line[0] == chr) {
-      if (to!ulong(line[2]) <= pos) {
-	if (before_bin2.length == 0) {
-	  before_bin2 = [line[1],line[2],line[6]];
-	} else if (before_bin.length == 0) {
-	  before_bin = [line[1],line[2],line[6]];
-	} else {
-	  before_bin2 = before_bin;
-	  before_bin = [line[1],line[2],line[6]];
-	}
-      }
-      if (to!ulong(line[1]) >= pos) {
-	if (after_bin.length == 0) {
-	  after_bin = [line[1],line[2],line[6]];
-	} else if (after_bin2.length == 0) {
-	  after_bin2 = [line[1],line[2],line[6]];
-	} else {
-	  break;
-	} 
-      }
-    }
-  }
-//   writeln(file,"\t",chr,"\t",pos,"\t",before_bin2,"\t",before_bin,"\t",after_bin,"\t",after_bin2);
-//   writeln(before_bin[2],"\t",after_bin[2]);
-  ulong[2] tuned_positions = get_tuned_position( file, chr, pos, to!uint(before_bin2[0]), to!uint(after_bin2[1]), before_bin[2], after_bin[2]);
-  return(tuned_positions);
-}
-
-ulong[2] get_tuned_position( string file, string chr, ulong pos, uint start, uint end, string from, string to ) {
-  ulong[2] tuned_positions;  
-  file = file.replace(".bins","");
-  BamReader bam = new BamReader(file);
-  auto reads = bam[chr][start..end];
-  BamRead[] subreads;
-  foreach( read ; reads ) {
-    if (read.mapping_quality > MQ) {
-      if (subreads.length < 14) {
-	subreads ~= read;
-      } else {
-	int[2] before_strand = [0, 0];
-	int[2] after_strand = [0, 0];
-	for (int i; i < subreads.length; i++) {
-	  if (subreads[i].strand == '+' && i < 7) {
-	    before_strand[0]++;
-	  } else if (subreads[i].strand == '-' && i < 7) {
-	    before_strand[1]++;
-	  } else if (subreads[i].strand == '+' && i >= 7) {
-	    after_strand[0]++;
-	  } else if (subreads[i].strand == '-' && i >= 7) {
-	    after_strand[1]++;
-	  }
-	}
-	if (from == "F" && to == "R" && before_strand[0] == 7 && after_strand[1] == 7) {
-	  tuned_positions = [subreads[6].position,subreads[7].position];
-// 	  writeln(file,"\t",chr,"\t",pos,"\t",start,"\t",end,"\t",from,"\t",to,"\t",subreads[6].position,"\t",subreads[7].position);
-	} else if (from == "F" && to == "FR" && before_strand[0] == 7 && after_strand[1] == 4) {
-	  tuned_positions = [subreads[6].position,subreads[7].position];
-// 	  writeln(file,"\t",chr,"\t",pos,"\t",start,"\t",end,"\t",from,"\t",to,"\t",subreads[6].position,"\t",subreads[7].position);
-	} else if (from == "R" && to == "F" && before_strand[1] == 7 && after_strand[0] == 7) {
-	  tuned_positions = [subreads[6].position,subreads[7].position];
-// 	  writeln(file,"\t",chr,"\t",pos,"\t",start,"\t",end,"\t",from,"\t",to,"\t",subreads[6].position,"\t",subreads[7].position);
-	} else if (from == "R" && to == "FR" && before_strand[1] == 7 && after_strand[0] == 4) {
-	  tuned_positions = [subreads[6].position,subreads[7].position];
-// 	  writeln(file,"\t",chr,"\t",pos,"\t",start,"\t",end,"\t",from,"\t",to,"\t",subreads[6].position,"\t",subreads[7].position);
-	} else if (from == "FR" && to == "R" && before_strand[0] == 4 && after_strand[1] == 7) {
-	  tuned_positions = [subreads[6].position,subreads[7].position];
-// 	  writeln(file,"\t",chr,"\t",pos,"\t",start,"\t",end,"\t",from,"\t",to,"\t",subreads[6].position,"\t",subreads[7].position);
-	} else if (from == "FR" && to == "F" && before_strand[1] == 4 && after_strand[0] == 7) {
-	  tuned_positions = [subreads[6].position,subreads[7].position];
-// 	  writeln(file,"\t",chr,"\t",pos,"\t",start,"\t",end,"\t",from,"\t",to,"\t",subreads[6].position,"\t",subreads[7].position);
-	} 
-	subreads = subreads[1..$-1];
-	subreads ~= read;
-      }
-    }
-  }
-  return(tuned_positions);
-}
-
+// function to get the output name
 string get_output_name( string folder ) {
-  if (folder.endsWith("/")) {
-    folder = replace(folder,regex(r"\/$"),"");
-  }
-  string[] path = folder.split("/");  
-  string outName = path[$-1];
-  return outName;
+  if (folder.endsWith("/")) { folder = replace(folder,regex(r"\/$"),""); } // parse last '/' character of the input folder name
+  string[] path = folder.split("/"); // split input folder name on '/'
+  string outName = path[$-1]; // store last part of the input folder name
+  return outName; // return output name
 }
 
-string process_slice_reads(BamReadBlock[] reads, string chr, ulong fwd_reads, ulong rev_reads) {
-  int start = reads[0].position;
-  int end = reads[$-1].position;
-  double fwd_ratio = to!double(fwd_reads)/(to!double(rev_reads)+to!double(fwd_reads));
-  string category = "FR";
-  if (fwd_ratio > 0.99) {
-    category = "F";
-  } else if (fwd_ratio < 0.01) {
-    category = "R";
-  }
-  return(category);
-}
-
+// function to calculate the mean of an array
 double mean(double[] array) {
-  double sum = 0.0;
-  foreach( item ; array ) {
-    sum += item;
+  double sum = 0.0; // initialize sum variable
+  foreach( item ; array ) { // loop throuh each item of the array
+    sum += item; // increase the sum
   }
-  double mean = sum/to!double(array.length);
-  return(mean);
+  double mean = sum/to!double(array.length); // calculate the mean
+  return(mean); // return the mean
 }
 
+// function to calculate the median of an array
 double median(double[] array) {
-  array.sort;
-  double pos = to!double(array.length/2);
-  double median = 0;
-  if ((array.length % 2) != 0) {
-    median = array[to!ulong(pos+0.5)];
-  } else {
-    median = (array[to!ulong(pos)]+array[to!ulong(pos-1)])/2;
-  }
-  return(median);
+  double median = 0; // initialize median variable  
+  array.sort; // sort array
+  double pos = to!double(array.length/2); // get middle position of the array
+  if ((array.length % 2) != 0) { median = array[to!ulong(pos+0.5)]; } // if the length of the array is odd, median is the middle value
+  else { median = (array[to!ulong(pos)]+array[to!ulong(pos-1)])/2; } // if the length of the array is even, median is the mean of the two middle values
+  return(median); // return median
 }
 
+// function to calculate the standard deviation of an array
 double stdev(double[] array) {
-  double mean = mean(array);
-  double sqtotal = 0.0;
-  foreach( item ; array ) {
-    sqtotal += (mean-to!double(item))^^2;
+  double sqtotal = 0.0; // initialize the square total variable
+  double mean = mean(array); // calculate the man of the array
+  foreach( item ; array ) { // loop through each item of the array
+    sqtotal += (mean-to!double(item))^^2; // calculate the square root distance of the variable from the mean
   }
-  auto std = (sqtotal/array.length)^^0.5;
-  return(std);
+  auto std = (sqtotal/array.length)^^0.5; // calculate the standard deviation
+  return(std); // return standard deviation
 }
 
+// class to create bin object
 class Bin {
   string chr;
   ulong start;
@@ -614,6 +508,7 @@ class Bin {
   }
 }
 
+// class to create region object
 class Region {
   string chr;
   ulong start;
@@ -629,6 +524,7 @@ class Region {
   }
 }
 
+// class to create switch point object
 class Point {
   string chr;
   ulong pos;
