@@ -344,7 +344,7 @@ void merge_switch_points(string patientFolder, string fatherFolder, string mothe
   output.writeln("##PATIENT COUNT PERCENTAGE: ",patient_count_perc);
   output.writeln("##MERGE_DISTANCE: ",merge_distance);  
   output.writeln("##PATIENT COUNT: ",to!ulong(patient_count));  
-  output.writeln("#CHR\tSTART\tEND\t","\t",patientName,"\t",fatherName,"\t",motherName,"\tPATIENT_PERC\tFATHER_PERC\tMOTHER_PERC\tFILTER\tREASON\tPATIENT_UNIQ\tFATHER_UNIQ\tMOTHER_UNIQ");
+  output.writeln("#CHR\tSTART\tEND\t",patientName,"\t",fatherName,"\t",motherName,"\tPATIENT_PERC\tFATHER_PERC\tMOTHER_PERC\tFILTER\tREASON\tPATIENT_UNIQ\tFATHER_UNIQ\tMOTHER_UNIQ");
     
   foreach( folder ; [patientFolder, fatherFolder, motherFolder] ) { // loop trough each folder of all samples
     string name = get_output_name(folder); // get output name of the sample
@@ -396,10 +396,10 @@ void merge_switch_points(string patientFolder, string fatherFolder, string mothe
 	    
 	    // if the percentage of switch points in the switch point region found in the patient is less then 'variable', report as failed
 	    if (perc_patient < patient_percentage) {
-	      output.writeln(chr,"\t",switch_point_region[0],"\t",switch_point_region[$-1],"\t","-","\t",patient_switch_points,"\t",father_switch_points,"\t",mother_switch_points,"\t",perc_patient,"\t",perc_father,"\t",perc_mother,"\t","FAILED","\t","PATIENT PERCENTAGE","\t",patient_uniq,"\t",father_uniq,"\t",mother_uniq);
+	      output.writeln(chr,"\t",switch_point_region[0],"\t",switch_point_region[$-1],"\t",patient_switch_points,"\t",father_switch_points,"\t",mother_switch_points,"\t",perc_patient,"\t",perc_father,"\t",perc_mother,"\t","FAILED","\t","PATIENT PERCENTAGE","\t",patient_uniq,"\t",father_uniq,"\t",mother_uniq);
 	    // if the number of switch points in the switch point region found in the patient is less then 'variable', report as failed	      
 	    } else if (patient_switch_points < patient_count) {
-	      output.writeln(chr,"\t",switch_point_region[0],"\t",switch_point_region[$-1],"\t","-","\t",patient_switch_points,"\t",father_switch_points,"\t",mother_switch_points,"\t",perc_patient,"\t",perc_father,"\t",perc_mother,"\t","FAILED","\t","PATIENT COUNT","\t",patient_uniq,"\t",father_uniq,"\t",mother_uniq);
+	      output.writeln(chr,"\t",switch_point_region[0],"\t",switch_point_region[$-1],"\t",patient_switch_points,"\t",father_switch_points,"\t",mother_switch_points,"\t",perc_patient,"\t",perc_father,"\t",perc_mother,"\t","FAILED","\t","PATIENT COUNT","\t",patient_uniq,"\t",father_uniq,"\t",mother_uniq);
 	    // report patient denovo switch points
 	    } else {
 	      output.writeln(chr,"\t",switch_point_region[0],"\t",switch_point_region[$-1],"\t",patient_switch_points,"\t",father_switch_points,"\t",mother_switch_points, "\t",perc_patient,"\t",perc_father,"\t",perc_mother,"\t","PASS","\t","-","\t",patient_uniq,"\t",father_uniq,"\t",mother_uniq);
@@ -438,10 +438,10 @@ void merge_switch_points(string patientFolder, string fatherFolder, string mothe
     
     // if the percentage of switch points in the switch point region found in the patient is less then 'variable', report as failed
     if (perc_patient < patient_percentage) {
-      output.writeln(chr,"\t",switch_point_region[0],"\t",switch_point_region[$-1],"\t","-","\t",patient_switch_points,"\t",father_switch_points,"\t",mother_switch_points,"\t",perc_patient,"\t",perc_father,"\t",perc_mother,"\t","FAILED","\t","PATIENT PERCENTAGE","\t",patient_uniq,"\t",father_uniq,"\t",mother_uniq);
+      output.writeln(chr,"\t",switch_point_region[0],"\t",switch_point_region[$-1],"\t",patient_switch_points,"\t",father_switch_points,"\t",mother_switch_points,"\t",perc_patient,"\t",perc_father,"\t",perc_mother,"\t","FAILED","\t","PATIENT PERCENTAGE","\t",patient_uniq,"\t",father_uniq,"\t",mother_uniq);
     // if the number of switch points in the switch point region found in the patient is less then 'variable', report as failed	      
     } else if (patient_switch_points < patient_count) {
-      output.writeln(chr,"\t",switch_point_region[0],"\t",switch_point_region[$-1],"\t","-","\t",patient_switch_points,"\t",father_switch_points,"\t",mother_switch_points,"\t",perc_patient,"\t",perc_father,"\t",perc_mother,"\t","FAILED","\t","PATIENT COUNT","\t",patient_uniq,"\t",father_uniq,"\t",mother_uniq);
+      output.writeln(chr,"\t",switch_point_region[0],"\t",switch_point_region[$-1],"\t",patient_switch_points,"\t",father_switch_points,"\t",mother_switch_points,"\t",perc_patient,"\t",perc_father,"\t",perc_mother,"\t","FAILED","\t","PATIENT COUNT","\t",patient_uniq,"\t",father_uniq,"\t",mother_uniq);
     // report patient denovo switch points
     } else {
       output.writeln(chr,"\t",switch_point_region[0],"\t",switch_point_region[$-1],"\t",patient_switch_points,"\t",father_switch_points,"\t",mother_switch_points, "\t",perc_patient,"\t",perc_father,"\t",perc_mother,"\t","PASS","\t","-","\t",patient_uniq,"\t",father_uniq,"\t",mother_uniq);
