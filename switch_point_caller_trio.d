@@ -19,6 +19,7 @@ double distance_factor = 3;
 double patient_percentage = 65;
 double patient_count_perc = 20;
 
+int[string][string] qc_fail;
 double patient_count;
 double father_count;
 double mother_count;
@@ -268,8 +269,9 @@ Region[] determine_regions(Bin[] bins) {
 // A switch point is the start position of a region
 Point[] determine_switch_points(Region[] regions) {
   Point[] switch_points; // initialize list of switch points
-  foreach( region ; regions ) { // loop through the regions
-    Point point = new Point(region.chr, region.start); // create a switch point object
+  for( int i = 1; i < regions.length; i++) {
+//   foreach( region ; regions ) { // loop through the regions
+    Point point = new Point(regions[i].chr, regions[i].start); // create a switch point object
     switch_points ~= point; // add the switch point to the list of switch points
   }
   return(switch_points); // return the list of switch point
@@ -278,7 +280,6 @@ Point[] determine_switch_points(Region[] regions) {
 // function for the QC analysis
 double[] qc_analysis(DirEntry[] bamFiles, double[] total_reads_distribution, double[] FR_bins_ratio_distribution, double[] bin_size_median_distribution, double[] number_of_bins_distribution, string folder) {
   // initialize variables
-  string[] failed;  
   double[] bin_size_median_distribution2;
   ulong passed_cells = 0;
     
@@ -305,12 +306,15 @@ double[] qc_analysis(DirEntry[] bamFiles, double[] total_reads_distribution, dou
   for( int i; i < bamFiles.length; i++ ) { // loop through all the *.bam files
     // if the total number of reads is less then the mean-sd, this bam file failed the QC
     if (total_reads_distribution[i] < (total_reads_mean-total_reads_sd)) {
+      qc_fail[folder][bamFiles[i]~".points"] = 1; // store qc failed cells
       statsFile.writeln(bamFiles[i],"\t",total_reads_distribution[i],"\t",FR_bins_ratio_distribution[i],"\t",bin_size_median_distribution[i],"\t",to!int(reads_per_bin),"\t",number_of_bins_distribution[i],"\t","FAILED","\t","TOTAL READS");
     // if the ratio of FR bins is bigger then the mean+sd, this bam file failed the QC
     } else if (FR_bins_ratio_distribution[i] > (FR_bins_ratio_mean+FR_bins_ratio_sd)) {
+      qc_fail[folder][bamFiles[i]~".points"] = 1; // store qc failed cells
       statsFile.writeln(bamFiles[i],"\t",total_reads_distribution[i],"\t",FR_bins_ratio_distribution[i],"\t",bin_size_median_distribution[i],"\t",to!int(reads_per_bin),"\t",number_of_bins_distribution[i],"\t","FAILED","\t","FR BIN RATIO");
     // if the total number of bins is less then the mean+sd, this bam file failed the QC    
     } else if (number_of_bins_distribution[i] < (number_of_bins_mean-number_of_bins_sd)) {
+      qc_fail[folder][bamFiles[i]~".points"] = 1; // store qc failed cells
       statsFile.writeln(bamFiles[i],"\t",total_reads_distribution[i],"\t",FR_bins_ratio_distribution[i],"\t",bin_size_median_distribution[i],"\t",to!int(reads_per_bin),"\t",number_of_bins_distribution[i],"\t","FAILED","\t","NUMBER OF BINS");
     // report the passed QC bam files
     } else {
@@ -328,6 +332,7 @@ double[] qc_analysis(DirEntry[] bamFiles, double[] total_reads_distribution, dou
 
 // function to merge switch points
 void merge_switch_points(string patientFolder, string fatherFolder, string motherFolder, double merge_distance) {
+  
   ulong[DirEntry][string][ulong][string] switch_points; // initialize switch points variable  
   
   // initialize output file name
@@ -349,7 +354,8 @@ void merge_switch_points(string patientFolder, string fatherFolder, string mothe
   foreach( folder ; [patientFolder, fatherFolder, motherFolder] ) { // loop trough each folder of all samples
     string name = get_output_name(folder); // get output name of the sample
     auto pointsFiles = array(filter!`endsWith(a.name,".points")`(dirEntries(folder,SpanMode.depth))); // get all *.points files
-    foreach( pointsFile ; pointsFiles ) { // loop through all switch points files
+    foreach( pointsFile ; pointsFiles ) { // loop through all switch points files      
+      if (pointsFile in qc_fail[folder]) { continue; } // skip qc failed cells
       File file = File(pointsFile,"r"); // open switch point file
       while(!file.eof()) { // loop through the switch point file
 	string[] line = chomp(file.readln()).split("\t"); // split each line on tabs
