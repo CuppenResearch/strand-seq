@@ -257,7 +257,7 @@ Region[] determine_regions(Bin[] bins) {
     prev_cat = bin.cat.dup; // store current category to the previous category
   }
   foreach( region_cat ; regions.keys ) { // loop trough the categories in the last region
-    if (regions[region_cat].length > 1) { // if the number of bins is bigger the 1
+    if (regions[region_cat].length > 1) { // if the number of bins is bigger then 1
       Region region = new Region(regions[region_cat][0].chr, regions[region_cat][0].start, regions[region_cat][$-1].end, region_cat); // create new region object
       regions_out ~= region; // add region to a list of region
     }
@@ -269,10 +269,17 @@ Region[] determine_regions(Bin[] bins) {
 // A switch point is the start position of a region
 Point[] determine_switch_points(Region[] regions) {
   Point[] switch_points; // initialize list of switch points
-  for( int i = 1; i < regions.length; i++) {
-//   foreach( region ; regions ) { // loop through the regions
-    Point point = new Point(regions[i].chr, regions[i].start); // create a switch point object
-    switch_points ~= point; // add the switch point to the list of switch points
+  for( int i = 0; i < regions.length; i++) { // loop through the regions
+    if (regions[i].cat != "FR") {
+      if (i != 0) {
+	Point point = new Point(regions[i].chr, regions[i].start); // create a switch point object
+	switch_points ~= point; // add the switch point to the list of switch points      
+      }
+      if (i != (regions.length-1)) {
+	Point point2 = new Point(regions[i].chr, regions[i].end); // create a second switch point object
+	switch_points ~= point2; // add the switch point to the list of switch points
+      }      
+    }
   }
   return(switch_points); // return the list of switch point
 }
